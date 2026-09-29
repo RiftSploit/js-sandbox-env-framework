@@ -167,7 +167,7 @@
     // HTMLElement 方法
     HTMLElement.prototype.click = function() {
         Monitor.logCall('HTMLElement.click', [], null, { elementId: this.__id__ });
-        if (this.onclick) this.onclick(new Event('click'));
+        this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
     };
     
     HTMLElement.prototype.focus = function() {
@@ -922,6 +922,11 @@
         this.TRIANGLES = 0x0004;
         this.TRIANGLE_STRIP = 0x0005;
         this.TRIANGLE_FAN = 0x0006;
+        this.VENDOR = 7936;
+        this.RENDERER = 7937;
+        this.VERSION = 7938;
+        this.SHADING_LANGUAGE_VERSION = 35724;
+        this._debugEnabled = false;
         // ... 更多常量
 
         // 直接在实例上定义关键方法（避免 Proxy 导致原型链断裂）
@@ -932,9 +937,16 @@
             var mock = Monitor.executeMock('WebGLRenderingContext.getParameter', [pname], self);
             if (mock.mocked) return mock.result;
             var glProfile = window.__profile__ && window.__profile__.webgl;
+            if ((pname === 37445 || pname === 37446) && !self._debugEnabled) return null;
             if (glProfile && glProfile.parameters) {
                 var val = glProfile.parameters[String(pname)];
                 if (val !== undefined) return val;
+            }
+            var fields = { 7936: 'vendor', 7937: 'renderer', 7938: 'version',
+                35724: 'shadingLanguageVersion', 37445: 'unmaskedVendor',
+                37446: 'unmaskedRenderer' };
+            if (glProfile && fields[pname] && glProfile[fields[pname]] !== undefined) {
+                return glProfile[fields[pname]];
             }
             return null;
         };
@@ -956,6 +968,7 @@
             if (glProfile && glProfile.extensions) {
                 if (!glProfile.extensions.includes(name)) return null;
                 if (name === 'WEBGL_debug_renderer_info') {
+                    self._debugEnabled = true;
                     return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
                 }
                 if (name === 'WEBGL_lose_context') {

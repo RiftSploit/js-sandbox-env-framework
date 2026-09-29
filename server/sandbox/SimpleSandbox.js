@@ -9,6 +9,7 @@ import path from 'path';
 import { URL, URLSearchParams } from 'node:url';
 import { fileURLToPath } from 'node:url';
 import { browserEnvModules } from './envModules.js';
+import { createHtmlBridge } from './htmlBridge.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ENV_ROOT = path.join(PROJECT_ROOT, 'env');
@@ -293,6 +294,28 @@ export class SimpleSandbox {
         const results = this.loadAllEnvFiles();
         const failed = results.find(item => !item.success);
         if (failed) throw new Error(`Failed to load ${failed.file}: ${failed.error}`);
+    }
+
+    /** Install a fetched or locally saved HTML document before executing site JavaScript. */
+    loadHTML(html, pageURL) {
+        if (typeof html !== 'string') throw new TypeError('HTML must be a string');
+        if (pageURL !== undefined && !/^https?:$/.test(new URL(pageURL).protocol)) {
+            throw new TypeError('Page URL must use HTTP or HTTPS');
+        }
+        this._ensureBrowserEnvironment();
+        if (!this.htmlBridge) this.htmlBridge = createHtmlBridge();
+        Object.defineProperty(this.context, '__htmlBridge__', {
+            value: this.htmlBridge, writable: true, configurable: true
+        });
+        const tree = this.htmlBridge.parseDocument(html);
+        this.context.__parsedHTML__ = tree;
+        try {
+            vm.runInContext(`window.__loadHTML__(window.__parsedHTML__, ${JSON.stringify(pageURL || null)})`,
+                this.context, { timeout: this.timeout });
+        } finally {
+            delete this.context.__parsedHTML__;
+        }
+        return this.context.document;
     }
 
     /**

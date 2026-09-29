@@ -491,7 +491,7 @@
     };
     
     window.dispatchEvent = function(event) {
-        event.target = window;
+        if (!event.target) event.target = window;
         event.currentTarget = window;
         const listeners = windowEventListeners[event.type] || [];
         listeners.forEach(({ listener }) => {
