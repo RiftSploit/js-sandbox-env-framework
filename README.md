@@ -18,6 +18,7 @@
 - Node.js >= 18.0.0
 - npm
 - Python 3.x（仅指纹采集功能需要，可选）
+- Chrome、Chromium 或 Edge（仅使用 Python 采集器时需要；Node 运行器不需要）
 
 ## 安装
 
@@ -46,6 +47,35 @@ node standalone-runner.js --detect your-script.js
 # 直接执行一段代码
 node standalone-runner.js --code "console.log(navigator.userAgent)"
 ```
+
+### 从采集到执行（#1、#2、#3、#4）
+
+在仓库根目录执行以下命令。`collect.py` 生成的是采集模板，`website-env-collector.py` 生成的是网站快照；它们都只是属性数据，不能自动还原网站的所有浏览器 API。
+
+```bash
+pip install -r collector/requirements.txt
+python collector/website-env-collector.py --url https://example.com --output captured.json --format json
+node standalone-runner.js --profile default --env captured.json --detect your-script.js
+```
+
+需要可执行的 JS 环境文件时，把采集命令改成 `--output captured.js --format js`，然后运行 `node standalone-runner.js --profile default --env captured.js your-script.js`。JSON 和 JS 两种格式都会把采集属性合并到已有的浏览器模拟对象，保留 `location.assign()`、`document.createElement()` 等方法。`--proxy` 可以附加在运行器命令中记录属性访问；旧版采集器生成的直接 `Object.assign(window, ...)` 文件也能加载，但会替换原有对象，建议重新生成。
+
+另一种采集方式：
+
+```bash
+python collector/collect.py https://example.com --output templates/site.json --gen-code
+node standalone-runner.js --profile default --env templates/site.json your-script.js
+```
+
+采集器找不到浏览器可执行文件时，用 `--browser-path` 明确指定文件，也可设置 `BROWSER_PATH` 环境变量。例如 Windows：`--browser-path "C:\Program Files\Google\Chrome\Application\chrome.exe"`；macOS：`--browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`。三个 Python 采集器都支持该参数。浏览器要先安装，所填路径必须指向可执行文件；`--browser-path` 属于 Python 采集命令，不是 Node 运行器的参数。
+
+排查 `Cannot convert undefined or null to object` 等脚本错误：
+
+1. 去掉 `--quiet`，加上 `--detect` 重跑，先看异常堆栈和缺失 API 报告；再用 `--proxy` 观察最近访问的对象。`--detect` 无法从 `Object.keys(undefined)` 自动反推出传入变量的来源。
+2. 在堆栈指向的目标脚本行附近找到 `Object.keys(...)`、`Object.entries(...)` 或对象展开语句，打印传入值及其上游属性路径；压缩脚本可先格式化后定位，注意格式化会改变行号。
+3. 核对对应属性是否在 `captured.json`、默认 profile 和模拟模块中存在；缺失时补具体属性或方法，再运行目标脚本验证。采集数据无法保证某个站点的签名脚本直接执行成功。
+
+不要把不可信脚本当作安全隔离任务交给 Node `vm`；这里的沙箱用于模拟环境与调试。
 
 ### Web 界面
 
@@ -418,15 +448,15 @@ ctx.startRendering().then(buf => {
 # 安装 Python 依赖
 pip install -r collector/requirements.txt
 
-# 采集指纹（使用 Selenium 打开浏览器自动采集）
+# 采集指纹（使用 DrissionPage 打开浏览器自动采集）
 npm run collect
 # 或
 python collector/fingerprint-collector.py
 
 # 采集目标网站的环境信息
-npm run collect:web
+npm run collect:web -- --url https://example.com --output captured.json
 # 或
-python collector/website-env-collector.py
+python collector/website-env-collector.py --url https://example.com --output captured.json
 ```
 
 采集结果会保存为 JSON 文件，可直接作为 profile 使用。

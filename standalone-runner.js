@@ -152,6 +152,9 @@ function loadEnvModule(relativePath) {
     return false;
 }
 
+loadEnvModule('env/core/applyCollectedEnvironment.js');
+loadEnvModule('env/core/NativeFunction.js');
+
 // ==================== 加载 Profile ====================
 if (profileName || profileFile) {
     let profilePath;
@@ -177,7 +180,10 @@ if (profileName || profileFile) {
 
     // 加载 ProfileManager
     loadEnvModule('env/core/ProfileManager.js');
+}
 
+// Collected snapshots need browser objects to merge into even without --profile.
+if (profileName || profileFile || envFile) {
     // 自动加载完整环境模块
     if (!quietMode) console.log('  加载环境模块...');
 
@@ -235,6 +241,9 @@ if (detectMode) {
     if (!quietMode) console.log('✓ 自动检测模式已启用\n');
 }
 
+// Mark only the browser mocks loaded so far, before executing user supplied code.
+vm.runInContext('window.__markBrowserFunctions__()', context, { timeout });
+
 // ==================== 加载环境文件 ====================
 if (envFile) {
     if (!quietMode) console.log(`📦 加载环境文件: ${envFile}`);
@@ -245,7 +254,8 @@ if (envFile) {
 
             if (envFile.endsWith('.json')) {
                 const envData = JSON.parse(envCode);
-                Object.assign(sandbox.window, envData);
+                // Parse again inside the VM so collector data has the same realm as the mocks.
+                vm.runInContext(`window.__applyCollectedEnvironment__(${JSON.stringify(envData)})`, context, { timeout });
             } else {
                 vm.runInContext(envCode, context, { timeout });
             }

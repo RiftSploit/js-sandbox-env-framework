@@ -12,19 +12,21 @@
 import json
 import argparse
 from pathlib import Path
+from browser_options import configure_browser_path
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
 except ImportError:
     print("❌ 请先安装 DrissionPage: pip install DrissionPage")
     exit(1)
 
-def collect_fingerprint(url='about:blank', headless=False):
+def collect_fingerprint(url='about:blank', headless=False, browser_path=None):
     """采集浏览器指纹"""
     
     print(f"🚀 启动浏览器...")
     
     # 配置浏览器
     co = ChromiumOptions()
+    configure_browser_path(co, browser_path)
     if headless:
         co.headless()
     
@@ -171,13 +173,14 @@ def main():
     parser.add_argument('--url', default='about:blank', help='要访问的URL')
     parser.add_argument('--output', '-o', help='输出文件路径 (JSON)')
     parser.add_argument('--headless', action='store_true', help='无头模式运行')
+    parser.add_argument('--browser-path', help='浏览器可执行文件路径（也可设置 BROWSER_PATH）')
     parser.add_argument('--pretty', action='store_true', help='格式化JSON输出')
     
     args = parser.parse_args()
     
     try:
         # 采集指纹
-        fingerprint = collect_fingerprint(args.url, args.headless)
+        fingerprint = collect_fingerprint(args.url, args.headless, args.browser_path)
         
         # 输出结果
         if args.output:

@@ -16,8 +16,10 @@ DrissionPage 浏览器环境采集器
 import json
 import sys
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
+from browser_options import configure_browser_path
 
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
@@ -29,7 +31,7 @@ except ImportError:
 class BrowserEnvCollector:
     """浏览器环境采集器"""
     
-    def __init__(self, browser='chrome', headless=True):
+    def __init__(self, browser='chrome', headless=True, browser_path=None):
         """
         初始化采集器
         
@@ -39,6 +41,7 @@ class BrowserEnvCollector:
         """
         self.browser = browser
         self.headless = headless
+        self.browser_path = browser_path
         self.page = None
         
     def start(self):
@@ -49,8 +52,9 @@ class BrowserEnvCollector:
             options.headless(True)
         
         # 设置浏览器路径（根据系统调整）
-        if self.browser == 'edge':
+        if self.browser == 'edge' and not (self.browser_path or os.environ.get('BROWSER_PATH')):
             options.set_browser_path('msedge')
+        configure_browser_path(options, self.browser_path)
         
         # 禁用一些可能影响环境采集的功能
         options.set_argument('--disable-blink-features=AutomationControlled')
@@ -441,51 +445,8 @@ def generate_env_code(template_data):
     Returns:
         str: 生成的JavaScript环境代码
     """
-    code_lines = [
-        "/**",
-        f" * 自动生成的浏览器环境代码",
-        f" * 浏览器: {template_data.get('browser', 'Unknown')} {template_data.get('version', '')}",
-        f" * 采集时间: {template_data.get('collectedAt', '')}",
-        f" * 来源URL: {template_data.get('sourceUrl', '')}",
-        " */",
-        "",
-        "(function() {",
-    ]
-    
-    # 生成 navigator
-    nav_data = template_data.get('objects', {}).get('navigator', {})
-    if nav_data:
-        code_lines.append("    // Navigator")
-        code_lines.append("    const navigatorProps = " + json.dumps(nav_data, indent=8) + ";")
-        code_lines.append("    Object.keys(navigatorProps).forEach(key => {")
-        code_lines.append("        if (key !== '__methods__' && key !== 'connection' && key !== 'userAgentData') {")
-        code_lines.append("            Object.defineProperty(window.navigator, key, {")
-        code_lines.append("                get: function() { return navigatorProps[key]; },")
-        code_lines.append("                configurable: true")
-        code_lines.append("            });")
-        code_lines.append("        }")
-        code_lines.append("    });")
-        code_lines.append("")
-    
-    # 生成 screen
-    screen_data = template_data.get('objects', {}).get('screen', {})
-    if screen_data:
-        code_lines.append("    // Screen")
-        code_lines.append("    const screenProps = " + json.dumps(screen_data, indent=8) + ";")
-        code_lines.append("    Object.assign(window.screen, screenProps);")
-        code_lines.append("")
-    
-    # 生成 window 属性
-    window_data = template_data.get('objects', {}).get('window', {})
-    if window_data:
-        code_lines.append("    // Window")
-        code_lines.append("    const windowProps = " + json.dumps(window_data, indent=8) + ";")
-        code_lines.append("    Object.assign(window, windowProps);")
-        code_lines.append("")
-    
-    code_lines.append("})();")
-    
-    return "\n".join(code_lines)
+    snapshot = json.dumps(template_data, ensure_ascii=False).replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
+    return f"window.__applyCollectedEnvironment__({snapshot});\n"
 
 
 def main():
@@ -493,6 +454,7 @@ def main():
     parser.add_argument('url', nargs='?', default=None, help='要访问的URL')
     parser.add_argument('--output', '-o', default='templates/env_template.json', help='输出文件路径')
     parser.add_argument('--browser', '-b', choices=['chrome', 'edge'], default='chrome', help='浏览器类型')
+    parser.add_argument('--browser-path', help='浏览器可执行文件路径（也可设置 BROWSER_PATH）')
     parser.add_argument('--headless', action='store_true', default=True, help='无头模式')
     parser.add_argument('--no-headless', dest='headless', action='store_false', help='有头模式')
     parser.add_argument('--gen-code', action='store_true', help='同时生成环境代码')
@@ -504,7 +466,7 @@ def main():
     print(f"目标URL: {args.url or 'about:blank'}")
     print(f"无头模式: {args.headless}")
     
-    collector = BrowserEnvCollector(browser=args.browser, headless=args.headless)
+    collector = BrowserEnvCollector(browser=args.browser, headless=args.headless, browser_path=args.browser_path)
     
     try:
         data = collector.collect_all(args.url)
