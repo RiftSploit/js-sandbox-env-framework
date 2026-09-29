@@ -1,15 +1,15 @@
 # JS 沙箱环境框架
 
-一个功能完整的 JavaScript 沙箱执行框架，专为 JS 逆向工程设计。支持运行复杂混淆代码、指纹配置驱动的浏览器环境模拟、Canvas/WebGL/Audio 指纹生成、代理监控等功能。
+一个用于 JS 逆向调试的 JavaScript 环境模拟框架。支持运行混淆代码、按指纹配置模拟常见浏览器 API、Canvas/WebGL/Audio 指纹配置和代理监控。
 
 ## 核心特性
 
 - **指纹配置系统** - 一个 JSON 文件控制所有浏览器指纹特征，一键切换设备身份
-- **完整浏览器环境** - Navigator、Screen、Window、Location、DOM、Canvas、WebGL、Audio 全覆盖
+- **常见浏览器环境** - Navigator、Screen、Window、Location、DOM、Canvas、WebGL、Audio 等模拟模块
 - **高性能沙箱** - 基于 Node.js VM，7866 行混淆代码 18ms 执行完成
 - **自动检测模式** - 自动报告脚本缺失的 API，给出加载建议
 - **代理监控** - 完整的 Proxy 追踪，记录所有属性访问和方法调用
-- **反检测** - webdriver=false、toString 保护、无 bot 特征泄露
+- **部分指纹模拟** - 可配置 webdriver、函数 toString 和部分浏览器属性
 - **Web 管理界面** - 在线执行代码、管理环境、查看日志
 - **AI 辅助补环境** - 自动生成缺失 API 的补环境代码
 
@@ -77,6 +77,24 @@ node standalone-runner.js --profile default --env templates/site.json your-scrip
 
 不要把不可信脚本当作安全隔离任务交给 Node `vm`；这里的沙箱用于模拟环境与调试。
 
+### 浏览器一致性与边界
+
+默认 `profiles/default.json` 描述的是 **Chrome 120 / Windows 10**，并不随本机浏览器自动升级。建议先固定目标浏览器版本和操作系统，再采集该浏览器的属性，与沙箱运行结果逐项对比。
+
+- `Location` 使用 WHATWG URL 解析相对地址；`History` 和导航只更新内存中的 URL，不加载新页面，也不实现真实的跨域 `WindowProxy`。
+- `Storage` 支持 `getItem/setItem` 与 `storage.foo` 共享数据；`navigator.userAgentData.getHighEntropyValues()` 只返回请求的高熵字段。
+- CLI 和 Web API 会等待脚本**返回的 Promise**，并应用超时。定时器、网络栈、布局渲染、GPU 和真实浏览器的内部对象仍由模拟代码决定。
+- 函数 `toString()`、对象标签与部分属性描述符已贴近浏览器；这不等于完整的 Chrome 指纹，具体站点仍需按实际调用链补齐。
+
+回归检查：
+
+```bash
+npm test
+python -m unittest discover -s test -p 'test_collector.py'
+```
+
+相关行为可参照 [HTML Standard 的 Window/Location/History 定义](https://html.spec.whatwg.org/multipage/nav-history-apis.html) 、[Web Storage 定义](https://html.spec.whatwg.org/multipage/webstorage.html) 和 [UA Client Hints 定义](https://wicg.github.io/ua-client-hints/) 核对。
+
 ### Web 界面
 
 ```bash
@@ -102,7 +120,7 @@ sandbox.injectEnvironment('env/dom/document.js');
 sandbox.injectEnvironment('env/bom/navigator.js');
 
 // 执行代码
-const result = sandbox.execute('navigator.userAgent');
+const result = await sandbox.execute('navigator.userAgent');
 console.log(result);
 // { success: true, result: 'Mozilla/5.0 ...', duration: 3, consoleOutput: [], ... }
 

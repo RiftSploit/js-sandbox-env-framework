@@ -6,6 +6,12 @@
 import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
+import { URL, URLSearchParams } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { browserEnvModules } from './envModules.js';
+
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const ENV_ROOT = path.join(PROJECT_ROOT, 'env');
 
 export class SimpleSandbox {
     constructor() {
@@ -56,6 +62,8 @@ export class SimpleSandbox {
             // Base64 编解码
             atob: (str) => Buffer.from(str, 'base64').toString('binary'),
             btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
+            URL,
+            URLSearchParams,
             // XMLHttpRequest 基础实现
             XMLHttpRequest: class XMLHttpRequest {
                 constructor() {
@@ -94,6 +102,13 @@ export class SimpleSandbox {
         // 创建上下文
         this.context = vm.createContext(sandbox);
         this.timeout = timeout;
+        this.profile = profile;
+        this.loadedEnvFiles = new Set();
+        for (const modulePath of ['env/core/applyCollectedEnvironment.js', 'env/core/NativeFunction.js']) {
+            vm.runInContext(fs.readFileSync(path.join(PROJECT_ROOT, modulePath), 'utf-8'), this.context,
+                { timeout: this.timeout });
+        }
+        if (profile) this._ensureBrowserEnvironment();
         
         console.log('[SimpleSandbox] 沙箱初始化完成');
         return this;
@@ -110,8 +125,28 @@ export class SimpleSandbox {
      * 执行代码
      */
     execute(code, options = {}) {
-        const { enableLogging = true } = options;
+        const { enableLogging = true, timeout = this.timeout } = options;
         const startTime = Date.now();
+
+        const success = (value) => ({
+            success: true,
+            result: this._serializeResult(value),
+            duration: Date.now() - startTime,
+            consoleOutput: this.context.__consoleOutput__ || [],
+            accessLogs: this.accessLogs.slice(-50),
+            callLogs: this.callLogs.slice(-50),
+            undefinedPaths: []
+        });
+        const failure = (error) => ({
+            success: false,
+            error: error.message,
+            stack: error.stack,
+            duration: Date.now() - startTime,
+            consoleOutput: this.context.__consoleOutput__ || [],
+            accessLogs: this.accessLogs.slice(-50),
+            callLogs: this.callLogs.slice(-50),
+            undefinedPaths: []
+        });
         
         try {
             // 清空日志
@@ -166,7 +201,7 @@ export class SimpleSandbox {
                 `;
                 
                 try {
-                    vm.runInContext(proxyCode, this.context, { timeout: this.timeout });
+                    vm.runInContext(proxyCode, this.context, { timeout });
                 } catch (e) {
                     console.log('[SimpleSandbox] Proxy setup skipped:', e.message);
                 }
@@ -174,34 +209,23 @@ export class SimpleSandbox {
             
             // 使用 vm.runInContext 执行代码
             const result = vm.runInContext(code, this.context, {
-                timeout: this.timeout,
+                timeout,
                 displayErrors: true
             });
-            
-            // 获取控制台输出
-            const consoleOutput = this.context.__consoleOutput__ || [];
-            
-            return {
-                success: true,
-                result: this._serializeResult(result),
-                duration: Date.now() - startTime,
-                consoleOutput: consoleOutput,
-                accessLogs: this.accessLogs.slice(-50), // 最近50条
-                callLogs: this.callLogs.slice(-50),
-                undefinedPaths: []
-            };
+
+            if (result && typeof result.then === 'function') {
+                let timer;
+                return Promise.race([
+                    result,
+                    new Promise((_, reject) => {
+                        timer = setTimeout(() => reject(new Error('异步执行超时')), timeout);
+                    })
+                ]).then(success, failure).finally(() => clearTimeout(timer));
+            }
+            return success(result);
         } catch (e) {
             console.error('[SimpleSandbox] Execute error:', e.message);
-            return {
-                success: false,
-                error: e.message,
-                stack: e.stack,
-                duration: Date.now() - startTime,
-                consoleOutput: this.context.__consoleOutput__ || [],
-                accessLogs: this.accessLogs.slice(-50),
-                callLogs: this.callLogs.slice(-50),
-                undefinedPaths: []
-            };
+            return failure(e);
         }
     }
 
@@ -213,21 +237,62 @@ export class SimpleSandbox {
             if (typeof envData === 'string') {
                 // 如果是文件路径
                 if (fs.existsSync(envData)) {
-                    const code = fs.readFileSync(envData, 'utf-8');
+                    const fullPath = path.resolve(envData);
+                    if (fullPath.startsWith(ENV_ROOT + path.sep)) {
+                        return this.loadEnvFile(path.relative(ENV_ROOT, fullPath));
+                    }
+                    const code = fs.readFileSync(fullPath, 'utf-8');
+                    if (fullPath.endsWith('.json')) {
+                        return this.injectEnvironment(JSON.parse(code));
+                    }
+                    this._ensureBrowserEnvironment();
                     vm.runInContext(code, this.context, { timeout: this.timeout });
                 } else {
                     // 如果是代码字符串
                     vm.runInContext(envData, this.context, { timeout: this.timeout });
                 }
-            } else if (typeof envData === 'object') {
-                // 如果是对象，直接注入到上下文
-                Object.assign(this.context.window, envData);
+            } else if (envData && typeof envData === 'object') {
+                this._ensureBrowserEnvironment();
+                vm.runInContext(`window.__applyCollectedEnvironment__(${JSON.stringify(envData)})`,
+                    this.context, { timeout: this.timeout });
             }
+            vm.runInContext('window.__markBrowserFunctions__()', this.context, { timeout: this.timeout });
             return { success: true };
         } catch (e) {
             console.error('[SimpleSandbox] 注入环境失败:', e.message);
             return { success: false, error: e.message };
         }
+    }
+
+    inject(code) { return this.injectEnvironment(code); }
+
+    loadEnvFile(file) {
+        try {
+            const relative = file.startsWith('env/') ? file.slice(4) : file;
+            const fullPath = path.resolve(ENV_ROOT, relative);
+            if (!fullPath.startsWith(ENV_ROOT + path.sep) || !fullPath.endsWith('.js')) {
+                throw new Error('Invalid environment module path');
+            }
+            if (!fs.existsSync(fullPath)) throw new Error(`Environment module not found: ${file}`);
+            if (!this.loadedEnvFiles.has(fullPath)) {
+                vm.runInContext(fs.readFileSync(fullPath, 'utf-8'), this.context, { timeout: this.timeout });
+                this.loadedEnvFiles.add(fullPath);
+                vm.runInContext('window.__markBrowserFunctions__()', this.context, { timeout: this.timeout });
+            }
+            return { success: true, file: relative };
+        } catch (error) {
+            return { success: false, file, error: error.message };
+        }
+    }
+
+    loadAllEnvFiles() {
+        return browserEnvModules.map(modulePath => this.loadEnvFile(modulePath));
+    }
+
+    _ensureBrowserEnvironment() {
+        const results = this.loadAllEnvFiles();
+        const failed = results.find(item => !item.success);
+        if (failed) throw new Error(`Failed to load ${failed.file}: ${failed.error}`);
     }
 
     /**
@@ -256,7 +321,7 @@ export class SimpleSandbox {
     reset() {
         this.vm = null;
         this.undefinedPaths = [];
-        this.init();
+        this.init({ profile: this.profile, timeout: this.timeout });
     }
 
     /**
@@ -282,7 +347,7 @@ export class SimpleSandbox {
      */
     getStats() {
         return {
-            loadedEnvFiles: [],
+            loadedEnvFiles: Array.from(this.loadedEnvFiles || []).map(file => path.relative(PROJECT_ROOT, file)),
             undefinedPaths: this.undefinedPaths,
             consoleOutputCount: this.context?.__consoleOutput__?.length || 0,
             ready: !!this.context,

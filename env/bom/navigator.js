@@ -215,26 +215,52 @@
         mobile: uadProfile.mobile !== undefined ? uadProfile.mobile : false,
         platform: uadProfile.platform || 'Windows',
         getHighEntropyValues: function(hints) {
-            return Promise.resolve({
+            if (arguments.length < 1) throw new TypeError('1 argument required');
+            const values = {
+                brands: this.brands,
+                mobile: this.mobile,
+                platform: this.platform
+            };
+            const available = {
                 architecture: uadProfile.architecture || 'x86',
                 bitness: uadProfile.bitness || '64',
-                brands: this.brands,
                 fullVersionList: uadProfile.fullVersionList || [
                     { brand: 'Not_A Brand', version: '8.0.0.0' },
                     { brand: 'Chromium', version: '120.0.6099.130' },
                     { brand: 'Google Chrome', version: '120.0.6099.130' }
                 ],
-                mobile: this.mobile,
                 model: uadProfile.model || '',
-                platform: this.platform,
                 platformVersion: uadProfile.platformVersion || '10.0.0',
-                uaFullVersion: uadProfile.fullVersionList ? uadProfile.fullVersionList[2].version : '120.0.6099.130'
-            });
+                uaFullVersion: uadProfile.uaFullVersion || '120.0.6099.130',
+                wow64: uadProfile.wow64 ?? false
+            };
+            for (const hint of hints) {
+                if (Object.prototype.hasOwnProperty.call(available, hint)) values[hint] = available[hint];
+            }
+            return Promise.resolve(values);
         },
         toJSON: function() {
             return { brands: this.brands, mobile: this.mobile, platform: this.platform };
         }
     };
 
+    function NavigatorUAData() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(NavigatorUAData.prototype, Symbol.toStringTag, {
+        value: 'NavigatorUAData', configurable: true
+    });
+    Object.setPrototypeOf(navigator.userAgentData, NavigatorUAData.prototype);
+    Object.defineProperty(window, 'NavigatorUAData', {
+        value: NavigatorUAData, writable: true, configurable: true
+    });
+
+    function Navigator() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(Navigator.prototype, Symbol.toStringTag, {
+        value: 'Navigator', configurable: true
+    });
+    Object.setPrototypeOf(navigator, Navigator.prototype);
+    Object.defineProperty(window, 'Navigator', {
+        value: Navigator, writable: true, configurable: true
+    });
     window.navigator = navigator;
+    window.clientInformation = navigator;
 })();

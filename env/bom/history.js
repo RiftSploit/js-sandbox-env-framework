@@ -1,118 +1,62 @@
-/**
- * @env-module history
- * @description 浏览器history对象模拟
- * @compatibility Chrome 80+, Firefox 75+, Edge 79+
- */
+/** In-memory same-origin session history for the Location mock. */
+(function () {
+    'use strict';
+    const entries = [{ state: null, url: window.location.href }];
+    let index = 0;
+    let restoration = 'auto';
 
-(function() {
-    const historyStack = [{ state: null, title: '', url: window.location?.href || 'https://example.com/' }];
-    let currentIndex = 0;
-
-    const history = {
-        get length() {
-            return historyStack.length;
-        },
-
-        get state() {
-            return historyStack[currentIndex]?.state || null;
-        },
-
-        get scrollRestoration() {
-            return 'auto';
-        },
-        set scrollRestoration(value) {
-            // 允许设置但不实际生效
-        },
-
-        back: function() {
-            if (currentIndex > 0) {
-                currentIndex--;
-                console.log('[history.back]', historyStack[currentIndex].url);
-                this._dispatchPopState();
-            }
-        },
-
-        forward: function() {
-            if (currentIndex < historyStack.length - 1) {
-                currentIndex++;
-                console.log('[history.forward]', historyStack[currentIndex].url);
-                this._dispatchPopState();
-            }
-        },
-
-        go: function(delta) {
-            delta = parseInt(delta) || 0;
-            const newIndex = currentIndex + delta;
-            
-            if (newIndex >= 0 && newIndex < historyStack.length) {
-                currentIndex = newIndex;
-                console.log('[history.go]', delta, historyStack[currentIndex].url);
-                this._dispatchPopState();
-            }
-        },
-
-        pushState: function(state, title, url) {
-            // 移除当前位置之后的所有历史记录
-            historyStack.splice(currentIndex + 1);
-            
-            // 添加新记录
-            const newUrl = this._resolveUrl(url);
-            historyStack.push({ state, title, url: newUrl });
-            currentIndex = historyStack.length - 1;
-            
-            console.log('[history.pushState]', state, title, url);
-            
-            // 更新location
-            if (window.location && url) {
-                window.location._parseUrl(newUrl);
-            }
-        },
-
-        replaceState: function(state, title, url) {
-            const newUrl = url ? this._resolveUrl(url) : historyStack[currentIndex].url;
-            historyStack[currentIndex] = { state, title, url: newUrl };
-            
-            console.log('[history.replaceState]', state, title, url);
-            
-            // 更新location
-            if (window.location && url) {
-                window.location._parseUrl(newUrl);
-            }
-        },
-
-        // 内部方法
-        _resolveUrl: function(url) {
-            if (!url) return historyStack[currentIndex]?.url || '';
-            
-            // 处理相对URL
-            if (url.startsWith('http://') || url.startsWith('https://')) {
-                return url;
-            }
-            
-            const origin = window.location?.origin || 'https://example.com';
-            if (url.startsWith('/')) {
-                return origin + url;
-            }
-            
-            const pathname = window.location?.pathname || '/';
-            const basePath = pathname.replace(/\/[^\/]*$/, '/');
-            return origin + basePath + url;
-        },
-
-        _dispatchPopState: function() {
-            // 触发popstate事件
-            if (typeof window !== 'undefined' && window.dispatchEvent) {
-                const event = {
-                    type: 'popstate',
-                    state: this.state,
-                    bubbles: true,
-                    cancelable: false
-                };
-                window.dispatchEvent(event);
-            }
+    function urlFor(input) {
+        const parsed = input === undefined || input === null
+            ? new URL(window.location.href)
+            : new URL(String(input), window.location.href);
+        if (parsed.origin !== window.location.origin) {
+            throw new DOMException('History state URL must have the same origin', 'SecurityError');
         }
-    };
+        return parsed.href;
+    }
+    function traverse(next) {
+        if (next < 0 || next >= entries.length || next === index) return;
+        index = next;
+        window.location.href = entries[index].url;
+        if (typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent({ type: 'popstate', state: entries[index].state });
+        }
+    }
 
-    // 挂载到window
-    window.history = history;
+    function History() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperties(History.prototype, {
+        length: { get: () => entries.length, configurable: true },
+        state: { get: () => entries[index].state, configurable: true },
+        scrollRestoration: {
+            get: () => restoration,
+            set: value => {
+                if (value !== 'auto' && value !== 'manual') throw new TypeError('Invalid scrollRestoration');
+                restoration = value;
+            }, configurable: true
+        },
+        back: { value: function back() { traverse(index - 1); }, writable: true, configurable: true },
+        forward: { value: function forward() { traverse(index + 1); }, writable: true, configurable: true },
+        go: { value: function go(delta = 0) { traverse(index + (Number(delta) | 0)); }, writable: true, configurable: true },
+        pushState: {
+            value: function pushState(state, title, url) {
+                if (arguments.length < 2) throw new TypeError('2 arguments required');
+                const href = urlFor(url);
+                entries.splice(index + 1);
+                entries.push({ state, url: href });
+                index = entries.length - 1;
+                window.location.href = href;
+            }, writable: true, configurable: true
+        },
+        replaceState: {
+            value: function replaceState(state, title, url) {
+                if (arguments.length < 2) throw new TypeError('2 arguments required');
+                const href = urlFor(url);
+                entries[index] = { state, url: href };
+                window.location.href = href;
+            }, writable: true, configurable: true
+        },
+        [Symbol.toStringTag]: { value: 'History', configurable: true }
+    });
+    Object.defineProperty(window, 'History', { value: History, writable: true, configurable: true });
+    window.history = Object.create(History.prototype);
 })();

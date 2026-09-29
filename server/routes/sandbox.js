@@ -117,7 +117,7 @@ router.post('/load-env', async (req, res) => {
         if (all) {
             const results = await sandbox.loadAllEnvFiles();
             res.json({
-                success: true,
+                success: results.every(result => result.success),
                 results
             });
         } else if (file) {
