@@ -33,5 +33,13 @@
         }
     };
 
+    function Screen() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(Screen.prototype, Symbol.toStringTag, {
+        value: 'Screen', configurable: true
+    });
+    Object.setPrototypeOf(screen, Screen.prototype);
+    Object.defineProperty(window, 'Screen', {
+        value: Screen, writable: true, configurable: true
+    });
     window.screen = screen;
 })();
