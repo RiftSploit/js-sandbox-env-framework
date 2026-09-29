@@ -112,6 +112,7 @@ sandbox.globalThis = sandbox;
 sandbox.self = sandbox;
 
 const context = vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'env/core/NativeFunction.js'), 'utf-8'), context);
 
 // 加载 Profile
 if (profileName || profileFile) {
@@ -154,6 +155,7 @@ if (proxyEnvCode) {
     vm.runInContext(proxyEnvCode, context);
     console.log('✓ ProxyEnv 已加载');
 }
+vm.runInContext('window.__markBrowserFunctions__()', context);
 
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 console.log(`执行: ${scriptFile}`);

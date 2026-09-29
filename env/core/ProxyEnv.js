@@ -31,7 +31,8 @@
                 readyState: 'complete'
             }, 'document'),
             enumerable: true,
-            configurable: false
+            configurable: true,
+            writable: true
         });
     }
     
@@ -51,7 +52,8 @@
                 doNotTrack: null
             }, 'navigator'),
             enumerable: true,
-            configurable: true
+            configurable: true,
+            writable: true
         });
     }
     
@@ -70,7 +72,8 @@
                 origin: 'http://localhost'
             }, 'location'),
             enumerable: true,
-            configurable: false
+            configurable: true,
+            writable: true
         });
     }
     
@@ -82,7 +85,8 @@
                 state: null
             }, 'history'),
             enumerable: true,
-            configurable: true
+            configurable: true,
+            writable: true
         });
     }
     
@@ -98,7 +102,8 @@
                 pixelDepth: 24
             }, 'screen'),
             enumerable: true,
-            configurable: true
+            configurable: true,
+            writable: true
         });
     }
     
@@ -107,7 +112,8 @@
         Object.defineProperty(window, 'localStorage', {
             value: watch({}, 'localStorage'),
             enumerable: true,
-            configurable: true
+            configurable: true,
+            writable: true
         });
     }
     
@@ -116,7 +122,8 @@
         Object.defineProperty(window, 'sessionStorage', {
             value: watch({}, 'sessionStorage'),
             enumerable: true,
-            configurable: true
+            configurable: true,
+            writable: true
         });
     }
     

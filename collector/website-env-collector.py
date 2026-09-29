@@ -12,6 +12,7 @@
 import json
 import argparse
 from pathlib import Path
+from browser_options import configure_browser_path
 
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
@@ -20,13 +21,14 @@ except ImportError:
     exit(1)
 
 
-def collect_website_environment(url, headless=False):
+def collect_website_environment(url, headless=False, browser_path=None):
     """深度采集网站环境"""
     
     print(f"🚀 启动浏览器并访问: {url}")
     
     # 配置浏览器
     co = ChromiumOptions()
+    configure_browser_path(co, browser_path)
     if headless:
         co.headless()
     
@@ -254,49 +256,8 @@ def collect_website_environment(url, headless=False):
 
 def generate_js_code(env_data, url):
     """生成 JS 环境代码"""
-    
-    code = f'''/**
- * 网站环境代码 - 自动采集生成
- * 来源: {url}
- * 生成时间: {import_datetime()}
- */
-
-(function() {{
-    // ========== Location 对象 ==========
-    const location = {json.dumps(env_data['location'], indent=4, ensure_ascii=False)};
-    
-    // ========== Navigator 对象 ==========
-    const navigator = {json.dumps(env_data['navigator'], indent=4, ensure_ascii=False)};
-    
-    // ========== Screen 对象 ==========
-    const screen = {json.dumps(env_data['screen'], indent=4, ensure_ascii=False)};
-    
-    // ========== Document 对象（部分属性） ==========
-    const documentProps = {json.dumps(env_data['document'], indent=4, ensure_ascii=False)};
-    
-    // 注入到 window
-    Object.assign(window, {{
-        location: location,
-        navigator: navigator,
-        screen: screen
-    }});
-    
-    // 创建基础 document 对象
-    if (typeof document === 'undefined') {{
-        window.document = {{}};
-    }}
-    Object.assign(document, documentProps);
-    
-    console.log('[WebEnv] 网站环境已加载:', '{url}');
-}})();
-'''
-    
-    return code
-
-
-def import_datetime():
-    from datetime import datetime
-    return datetime.now().isoformat()
+    snapshot = json.dumps(env_data, ensure_ascii=False).replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
+    return f"window.__applyCollectedEnvironment__({snapshot});\n"
 
 
 def main():
@@ -305,13 +266,14 @@ def main():
     parser.add_argument('--output', '-o', help='输出文件路径')
     parser.add_argument('--format', choices=['json', 'js'], default='json', help='输出格式')
     parser.add_argument('--headless', action='store_true', help='无头模式运行')
+    parser.add_argument('--browser-path', help='Chrome/Chromium/Edge 可执行文件路径（也可设置 BROWSER_PATH）')
     parser.add_argument('--pretty', action='store_true', help='格式化输出')
     
     args = parser.parse_args()
     
     try:
         # 采集环境
-        env_data = collect_website_environment(args.url, args.headless)
+        env_data = collect_website_environment(args.url, args.headless, args.browser_path)
         
         # 输出结果
         if args.output:

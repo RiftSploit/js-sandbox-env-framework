@@ -7,33 +7,9 @@
 (() => {
     'use strict';
     
-    // ==================== toString 保护 ====================
-    const $toString = Function.toString;
-    const myFunction_toString_symbol = Symbol('('.concat('', ')_', (Math.random() + '').toString(36)));
-    
-    const myToString = function () {
-        return typeof this == 'function' && this[myFunction_toString_symbol] || $toString.call(this);
-    };
-
-    function set_native(func, key, value) {
-        Object.defineProperty(func, key, {
-            "enumerable": false,
-            "configurable": true,
-            "writable": true,
-            "value": value
-        })
-    }
-
-    // 删除并重写 toString
-    delete Function.prototype['toString'];
-    set_native(Function.prototype, "toString", myToString);
-    set_native(Function.prototype.toString, myFunction_toString_symbol, "function toString() { [native code] }");
-    
-    // 导出安全函数设置
-    globalThis.safefunction = (func) => {
-        set_native(func, myFunction_toString_symbol, `function ${func.name || ''}() { [native code] }`);
-    };
-    
+    // NativeFunction.js installs safefunction before this module in the runners.
+    // Allow direct injection of ProxyMonitor without breaking makeFunction.
+    if (typeof globalThis.safefunction !== 'function') globalThis.safefunction = (fn) => fn;
     // ==================== 日志配置 ====================
     const LogConfig = {
         enabled: true,
@@ -251,6 +227,7 @@
         }
 
         func = watch(func, `方法本身:${name}`)
+        globalThis.safefunction(func);
         return func;
     };
     

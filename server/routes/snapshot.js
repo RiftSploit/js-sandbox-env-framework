@@ -3,7 +3,6 @@
  */
 
 import express from 'express';
-import { SandboxManager } from '../sandbox/index.js';
 
 const router = express.Router();
 
