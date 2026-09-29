@@ -37,17 +37,28 @@
             const names = [
                 'navigator', 'location', 'history', 'screen', 'document', 'localStorage',
                 'sessionStorage', 'performance', 'crypto', 'XMLHttpRequest', 'Document',
+                'Navigator', 'NavigatorUAData', 'Screen', 'Location', 'History', 'Storage', 'StorageEvent', 'HTMLDocument', 'Window',
                 'Element', 'HTMLElement', 'HTMLCanvasElement', 'CanvasRenderingContext2D',
                 'WebGLRenderingContext', 'AudioContext', 'OfflineAudioContext',
-                'TextEncoder', 'TextDecoder', 'URL', 'Blob'
+                'TextEncoder', 'TextDecoder', 'URL', 'URLSearchParams', 'Blob'
             ];
             for (const name of names) {
                 const object = globalThis[name];
                 markOwnMethods(object);
+                if (object && typeof object === 'object') {
+                    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(object))) {
+                        if (descriptor.value && typeof descriptor.value === 'object') {
+                            markOwnMethods(descriptor.value);
+                        }
+                    }
+                }
                 if (typeof object === 'function') {
                     safefunction(object, name);
                     markOwnMethods(object.prototype);
                 }
+            }
+            for (const name of ['caches', 'customElements', 'speechSynthesis', 'chrome']) {
+                markOwnMethods(globalThis[name]);
             }
             // The window mock has many methods; only mark those already present now.
             markOwnMethods(globalThis);

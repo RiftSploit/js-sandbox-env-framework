@@ -2285,6 +2285,7 @@
     window.DOMException = DOMException;
     
     // ==================== Document ====================
+    const initialDocumentURL = window.location?.href || 'https://example.com/';
     const document = {
         // 基本属性
         nodeType: 9,
@@ -2304,10 +2305,10 @@
         doctype: { name: 'html', publicId: '', systemId: '' },
         
         // URL 相关
-        URL: 'https://example.com/',
-        documentURI: 'https://example.com/',
-        baseURI: 'https://example.com/',
-        domain: 'example.com',
+        URL: initialDocumentURL,
+        documentURI: initialDocumentURL,
+        baseURI: initialDocumentURL,
+        domain: window.location?.hostname || 'example.com',
         referrer: '',
         cookie: '',
         lastModified: new Date().toUTCString(),
@@ -2745,8 +2746,23 @@
     initDocumentStructure();
     
     // ==================== 暴露到全局 ====================
-    window.document = document;
-    window.Document = function() { return document; };
+    function Document() { throw new TypeError('Illegal constructor'); }
+    Document.prototype = Object.create(Node.prototype);
+    Object.defineProperty(Document.prototype, 'constructor', {
+        value: Document, writable: true, configurable: true
+    });
+    function HTMLDocument() { throw new TypeError('Illegal constructor'); }
+    HTMLDocument.prototype = Object.create(Document.prototype);
+    Object.defineProperties(HTMLDocument.prototype, {
+        constructor: { value: HTMLDocument, writable: true, configurable: true },
+        [Symbol.toStringTag]: { value: 'HTMLDocument', configurable: true }
+    });
+    Object.setPrototypeOf(document, HTMLDocument.prototype);
+    Object.defineProperty(window, 'document', {
+        enumerable: true, configurable: false, get: () => document
+    });
+    window.Document = Document;
+    window.HTMLDocument = HTMLDocument;
     window.Element = Element;
     window.HTMLElement = HTMLElement;
     window.HTMLDivElement = HTMLDivElement;

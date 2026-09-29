@@ -8,6 +8,7 @@ import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { URL, URLSearchParams } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +97,8 @@ const sandbox = {
     clearInterval: (id) => {},
     atob: (str) => Buffer.from(str, 'base64').toString('binary'),
     btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
+    URL,
+    URLSearchParams,
     XMLHttpRequest: class XMLHttpRequest {
         constructor() {
             this.bdmsInvokeList = [];

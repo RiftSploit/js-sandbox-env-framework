@@ -1095,6 +1095,15 @@
         };
     }
     
+    function Window() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(Window.prototype, Symbol.toStringTag, {
+        value: 'Window', configurable: true
+    });
+    Object.setPrototypeOf(window, Window.prototype);
+    Object.defineProperty(window, 'Window', {
+        value: Window, writable: true, configurable: true
+    });
+
     Monitor.log('BOM', 'window.init', { version: '2.0.0' });
     
 })();

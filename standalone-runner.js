@@ -15,6 +15,8 @@ import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { URL, URLSearchParams } from 'node:url';
+import { browserEnvModules } from './server/sandbox/envModules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -119,6 +121,8 @@ const sandbox = {
     clearInterval: (id) => {},
     atob: (str) => Buffer.from(str, 'base64').toString('binary'),
     btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
+    URL,
+    URLSearchParams,
     XMLHttpRequest: class XMLHttpRequest {
         constructor() { this.bdmsInvokeList = []; }
         open() {}
@@ -187,29 +191,7 @@ if (profileName || profileFile || envFile) {
     // 自动加载完整环境模块
     if (!quietMode) console.log('  加载环境模块...');
 
-    // 核心监控
-    loadEnvModule('env/core/EnvMonitor.js');
-    loadEnvModule('env/core/MonitorSystem.js');
-
-    // BOM
-    loadEnvModule('env/bom/navigator.js');
-    loadEnvModule('env/bom/screen.js');
-    loadEnvModule('env/bom/window.js');
-    loadEnvModule('env/bom/location.js');
-    loadEnvModule('env/bom/history.js');
-    loadEnvModule('env/bom/storage.js');
-    loadEnvModule('env/bom/crypto.js');
-    loadEnvModule('env/bom/performance.js');
-
-    // DOM
-    loadEnvModule('env/dom/event.js');
-    loadEnvModule('env/dom/document.js');
-    loadEnvModule('env/dom/elements.js');
-
-    // WebAPI
-    loadEnvModule('env/webapi/audio.js');
-    loadEnvModule('env/encoding/textencoder.js');
-    loadEnvModule('env/timer/timeout.js');
+    for (const modulePath of browserEnvModules) loadEnvModule(modulePath);
 
     if (!quietMode) console.log('  ✓ 环境模块加载完成\n');
 }
@@ -319,6 +301,24 @@ try {
         timeout: timeout,
         displayErrors: true
     });
+
+    // Browser APIs often return promises. Wait for the script's returned
+    // promise before reporting its value, while bounding asynchronous work.
+    if (result && typeof result.then === 'function') {
+        let timeoutId;
+        try {
+            result = await Promise.race([
+                result,
+                new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error('异步执行超时')), timeout);
+                })
+            ]);
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    } else {
+        await Promise.resolve();
+    }
 
     const output = sandbox.__output__;
 
