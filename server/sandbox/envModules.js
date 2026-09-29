@@ -3,6 +3,7 @@ export const browserEnvModules = [
     'env/core/EnvMonitor.js',
     'env/core/MonitorSystem.js',
     'env/bom/navigator.js',
+    'env/bom/timezone.js',
     'env/bom/screen.js',
     'env/bom/window.js',
     'env/bom/location.js',

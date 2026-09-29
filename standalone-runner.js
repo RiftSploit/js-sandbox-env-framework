@@ -17,6 +17,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { URL, URLSearchParams } from 'node:url';
 import { browserEnvModules } from './server/sandbox/envModules.js';
+import { createHtmlBridge } from './server/sandbox/htmlBridge.js';
+import { readHTMLFile, fetchPageHTML } from './server/sandbox/pageSource.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +33,9 @@ let quietMode = false;
 let profileName = null;
 let profileFile = null;
 let detectMode = false;
+let htmlFile = null;
+let htmlURL = null;
+let pageURL = null;
 
 for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -51,6 +56,12 @@ for (let i = 0; i < args.length; i++) {
         profileFile = args[++i];
     } else if (arg === '--detect' || arg === '-d') {
         detectMode = true;
+    } else if (arg === '--html-file' && i + 1 < args.length) {
+        htmlFile = args[++i];
+    } else if (arg === '--html-url' && i + 1 < args.length) {
+        htmlURL = args[++i];
+    } else if (arg === '--page-url' && i + 1 < args.length) {
+        pageURL = args[++i];
     } else if (arg === '--help' || arg === '-h') {
         console.log(`
 沙箱脚本运行器 v2.0
@@ -62,6 +73,9 @@ for (let i = 0; i < args.length; i++) {
 选项:
   --code <代码>           直接执行代码字符串
   --env <文件>            加载环境文件（JSON或JS）
+  --html-file <文件>      将本地 HTML 加载为 document
+  --html-url <URL>        请求 HTML 并加载为 document
+  --page-url <URL>        本地 HTML 对应的 HTTP(S) 页面地址
   --profile <名称>        加载指纹配置（从 profiles/ 目录）
   --profile-file <路径>   加载自定义指纹配置文件
   --detect, -d           自动检测模式（报告缺失的 API）
@@ -83,6 +97,11 @@ for (let i = 0; i < args.length; i++) {
     } else if (!scriptFile && !codeString) {
         scriptFile = arg;
     }
+}
+
+if (htmlFile && htmlURL) {
+    console.error('✗ --html-file 和 --html-url 只能选择一个');
+    process.exit(1);
 }
 
 // 创建沙箱
@@ -187,7 +206,7 @@ if (profileName || profileFile) {
 }
 
 // Collected snapshots need browser objects to merge into even without --profile.
-if (profileName || profileFile || envFile) {
+if (profileName || profileFile || envFile || htmlFile || htmlURL || pageURL) {
     // 自动加载完整环境模块
     if (!quietMode) console.log('  加载环境模块...');
 
@@ -248,6 +267,36 @@ if (envFile) {
         }
     } catch (e) {
         console.error(`✗ 加载环境失败: ${e.message}`);
+        process.exit(1);
+    }
+}
+
+// HTML is parsed in the host and copied into the VM through existing DOM constructors.
+// A fetched page does not execute inline or remote scripts automatically.
+if (htmlFile || htmlURL || pageURL) {
+    try {
+        const page = htmlURL ? await fetchPageHTML(htmlURL) :
+            { html: htmlFile ? readHTMLFile(path.resolve(htmlFile)) : null, url: pageURL };
+        const targetURL = pageURL || page.url;
+        if (targetURL && !['http:', 'https:'].includes(new URL(targetURL).protocol)) {
+            throw new Error('Page URL must use HTTP or HTTPS');
+        }
+        if (page.html !== null) {
+            const bridge = createHtmlBridge();
+            Object.defineProperty(context, '__htmlBridge__', { value: bridge, configurable: true });
+            sandbox.__parsedHTML__ = bridge.parseDocument(page.html);
+            try {
+                vm.runInContext(`window.__loadHTML__(window.__parsedHTML__, ${JSON.stringify(targetURL || null)})`,
+                    context, { timeout });
+            } finally {
+                delete sandbox.__parsedHTML__;
+            }
+        } else {
+            vm.runInContext(`window.location.href = ${JSON.stringify(targetURL)}`, context, { timeout });
+        }
+        if (!quietMode) console.log(`✓ 页面环境已加载: ${targetURL || '本地 HTML'}\n`);
+    } catch (error) {
+        console.error(`✗ HTML 加载失败: ${error.message}`);
         process.exit(1);
     }
 }

@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { SimpleSandbox } from '../sandbox/SimpleSandbox.js';
+import { MAX_HTML_BYTES } from '../sandbox/pageSource.js';
 
 const router = express.Router();
 
@@ -27,13 +28,27 @@ async function getSandbox() {
  * Body: { code: '...', loadEnv: true, timeout: 5000 }
  */
 router.post('/run', async (req, res) => {
-    const { code, loadEnv = true, timeout = 5000, reset = false } = req.body;
+    const { code, loadEnv = true, timeout = 5000, reset = false,
+        html, pageURL, profile } = req.body;
     
     if (!code) {
         return res.status(400).json({
             success: false,
             error: 'Missing code parameter'
         });
+    }
+    if (html !== undefined && (typeof html !== 'string' ||
+        Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES)) {
+        return res.status(400).json({ success: false, error: 'HTML must be a string of at most 2 MiB' });
+    }
+    if (pageURL !== undefined) {
+        try {
+            if (typeof pageURL !== 'string' || !['http:', 'https:'].includes(new URL(pageURL).protocol)) {
+                throw new TypeError('Invalid page URL');
+            }
+        } catch {
+            return res.status(400).json({ success: false, error: 'pageURL must be an HTTP(S) URL' });
+        }
     }
 
     try {
@@ -42,7 +57,18 @@ router.post('/run', async (req, res) => {
             await sandboxInstance.reset();
         }
 
-        const sandbox = await getSandbox();
+        // An HTML document is per run: do not leak page DOM or cookies to later requests.
+        const sandbox = html !== undefined ? new SimpleSandbox().init({ timeout, profile }) : await getSandbox();
+        if (loadEnv) {
+            const results = sandbox.loadAllEnvFiles();
+            const failed = results.find(result => !result.success);
+            if (failed) throw new Error(`Failed to load ${failed.file}: ${failed.error}`);
+        }
+        if (html !== undefined) sandbox.loadHTML(html, pageURL);
+        else if (pageURL) {
+            sandbox._ensureBrowserEnvironment();
+            sandbox.context.location.href = pageURL;
+        }
         
         // 执行代码
         const result = await sandbox.execute(code, { timeout });

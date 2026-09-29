@@ -60,6 +60,8 @@
             for (const name of ['caches', 'customElements', 'speechSynthesis', 'chrome']) {
                 markOwnMethods(globalThis[name]);
             }
+            markOwnMethods(Date.prototype);
+            safefunction(Intl.DateTimeFormat, 'DateTimeFormat');
             // The window mock has many methods; only mark those already present now.
             markOwnMethods(globalThis);
         },

@@ -39,19 +39,24 @@
         
         return new Proxy(this, {
             get: function(target, prop) {
-                if (prop in target) return target[prop];
                 if (typeof prop === 'symbol') return target[prop];
+                if (prop in target) return target[prop];
                 const cssProp = prop.replace(/([A-Z])/g, '-$1').toLowerCase();
-                return target._styles[prop] || target._styles[cssProp] || '';
+                return target._styles[cssProp] || '';
             },
             set: function(target, prop, value) {
+                if (typeof prop === 'symbol') { target[prop] = value; return true; }
                 if (prop.startsWith('_')) {
                     target[prop] = value;
                     return true;
                 }
+                if (prop === 'cssText') {
+                    target.cssText = value;
+                    return true;
+                }
                 const cssProp = prop.replace(/([A-Z])/g, '-$1').toLowerCase();
-                target._styles[prop] = value;
-                target._styles[cssProp] = value;
+                target._styles[cssProp] = String(value);
+                target._syncAttribute();
                 
                 Monitor.log('Style', 'setStyle', {
                     elementId: target._element?.__id__,
@@ -65,10 +70,17 @@
     }
     
     CSSStyleDeclaration.prototype = {
+        _syncAttribute: function() {
+            if (!this._element?.attributes) return;
+            const value = this.cssText;
+            this._element._attrValues.style = value;
+            this._element.attributes.setNamedItem(new Attr('style', value, this._element));
+        },
         getPropertyValue: function(prop) { return this._styles[prop] || ''; },
         setProperty: function(prop, value, priority) {
-            this._styles[prop] = value;
+            this._styles[prop] = String(value);
             if (priority === 'important') this._importantStyles[prop] = true;
+            this._syncAttribute();
             Monitor.log('Style', 'setProperty', {
                 elementId: this._element?.__id__,
                 property: prop,
@@ -80,6 +92,7 @@
             const value = this._styles[prop];
             delete this._styles[prop];
             delete this._importantStyles[prop];
+            this._syncAttribute();
             return value || '';
         },
         getPropertyPriority: function(prop) {
@@ -88,17 +101,22 @@
         get cssText() {
             return Object.entries(this._styles)
                 .filter(([k]) => !k.startsWith('_'))
-                .map(([k, v]) => `${k}: ${v}`)
-                .join('; ');
+                .map(([k, v]) => `${k}: ${v}${this._importantStyles[k] ? ' !important' : ''};`)
+                .join(' ');
         },
         set cssText(value) {
             this._styles = {};
+            this._importantStyles = {};
             if (value) {
-                value.split(';').forEach(part => {
-                    const [prop, val] = part.split(':').map(s => s?.trim());
+                String(value).split(';').forEach(part => {
+                    const separator = part.indexOf(':');
+                    if (separator < 0) return;
+                    const prop = part.slice(0, separator).trim().toLowerCase();
+                    const val = part.slice(separator + 1).trim();
                     if (prop && val) this._styles[prop] = val;
                 });
             }
+            this._syncAttribute();
         },
         get length() {
             return Object.keys(this._styles).filter(k => !k.startsWith('_')).length;
@@ -238,7 +256,7 @@
         
         return new Proxy(this, {
             get: function(target, prop) {
-                if (prop.startsWith('_') || typeof prop === 'symbol') return target[prop];
+                if (typeof prop === 'symbol' || prop.startsWith('_')) return target[prop];
                 const attrName = 'data-' + prop.replace(/([A-Z])/g, '-$1').toLowerCase();
                 return target._element.getAttribute(attrName);
             },
@@ -300,7 +318,6 @@
         this.previousSibling = null;
         this.nextSibling = null;
         this.ownerDocument = null;
-        this.textContent = '';
         this.isConnected = false;
     }
     
@@ -317,12 +334,16 @@
         DOCUMENT_FRAGMENT_NODE: 11,
         
         appendChild: function(child) {
+            if (!child || typeof child !== 'object' || child === this || child.contains?.(this)) {
+                throw new DOMException('The node cannot be inserted here.', 'HierarchyRequestError');
+            }
             if (child.parentNode) child.parentNode.removeChild(child);
             child.parentNode = this;
             child.parentElement = this.nodeType === 1 ? this : null;
             child.ownerDocument = this.ownerDocument;
             this.childNodes.push(child);
             this._updateChildReferences();
+            child._setConnected(this.nodeType === 9 || this.isConnected);
             
             Monitor.log('DOM', 'appendChild', {
                 parentId: this.__id__,
@@ -341,6 +362,7 @@
             this.childNodes.splice(idx, 1);
             child.parentNode = null;
             child.parentElement = null;
+            child._setConnected(false);
             this._updateChildReferences();
             
             Monitor.log('DOM', 'removeChild', {
@@ -352,6 +374,10 @@
         
         insertBefore: function(newNode, referenceNode) {
             if (!referenceNode) return this.appendChild(newNode);
+            if (newNode === referenceNode) return newNode;
+            if (newNode === this || newNode.contains?.(this)) {
+                throw new DOMException('The node cannot be inserted here.', 'HierarchyRequestError');
+            }
             const idx = this.childNodes.indexOf(referenceNode);
             if (idx === -1) {
                 throw new DOMException("Failed to execute 'insertBefore': reference node is not a child.", 'NotFoundError');
@@ -362,6 +388,7 @@
             newNode.ownerDocument = this.ownerDocument;
             this.childNodes.splice(idx, 0, newNode);
             this._updateChildReferences();
+            newNode._setConnected(this.nodeType === 9 || this.isConnected);
             
             Monitor.log('DOM', 'insertBefore', {
                 parentId: this.__id__,
@@ -372,6 +399,10 @@
         },
         
         replaceChild: function(newChild, oldChild) {
+            if (newChild === oldChild) return oldChild;
+            if (newChild === this || newChild.contains?.(this)) {
+                throw new DOMException('The node cannot be inserted here.', 'HierarchyRequestError');
+            }
             const idx = this.childNodes.indexOf(oldChild);
             if (idx === -1) {
                 throw new DOMException("Failed to execute 'replaceChild': old child is not a child.", 'NotFoundError');
@@ -384,6 +415,8 @@
             oldChild.parentNode = null;
             oldChild.parentElement = null;
             this._updateChildReferences();
+            oldChild._setConnected(false);
+            newChild._setConnected(this.nodeType === 9 || this.isConnected);
             
             Monitor.log('DOM', 'replaceChild', {
                 parentId: this.__id__,
@@ -443,6 +476,10 @@
                 node.previousSibling = this.childNodes[i - 1] || null;
                 node.nextSibling = this.childNodes[i + 1] || null;
             }
+        },
+        _setConnected: function(value) {
+            this.isConnected = value;
+            for (const child of this.childNodes) child._setConnected(value);
         }
     };
     
@@ -474,11 +511,8 @@
         this.dataset = new DOMStringMap(this);
         
         // 常用属性
-        this.id = '';
-        this.className = '';
-        this.innerHTML = '';
-        this.outerHTML = '';
-        this.innerText = '';
+        // Attributes and markup are reflected by accessors on Element.prototype.
+        // A layout engine is unavailable, so visible text uses the DOM text.
         
         // 事件
         this._eventListeners = {};
@@ -504,6 +538,167 @@
     
     Element.prototype = Object.create(Node.prototype);
     Element.prototype.constructor = Element;
+
+    function NodeList() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(NodeList.prototype, Symbol.toStringTag, { value: 'NodeList' });
+    NodeList.prototype.item = function(index) { return this[index] || null; };
+    NodeList.prototype.forEach = function(callback, thisArg) {
+        for (let i = 0; i < this.length; i++) callback.call(thisArg, this[i], i, this);
+    };
+    NodeList.prototype[Symbol.iterator] = function*() {
+        for (let i = 0; i < this.length; i++) yield this[i];
+    };
+    function staticNodeList(nodes) {
+        const list = Object.create(NodeList.prototype);
+        nodes.forEach((node, index) => Object.defineProperty(list, index,
+            { value: node, enumerable: true, configurable: true }));
+        Object.defineProperty(list, 'length', { value: nodes.length });
+        return list;
+    }
+    window.NodeList = NodeList;
+
+    function HTMLCollection() { throw new TypeError('Illegal constructor'); }
+    Object.defineProperty(HTMLCollection.prototype, Symbol.toStringTag, { value: 'HTMLCollection' });
+    HTMLCollection.prototype.item = function(index) { return this[index] || null; };
+    HTMLCollection.prototype.namedItem = function(name) {
+        for (const node of this) {
+            if (node.id === String(name) || node.getAttribute('name') === String(name)) return node;
+        }
+        return null;
+    };
+    HTMLCollection.prototype[Symbol.iterator] = function*() {
+        for (let i = 0; i < this.length; i++) yield this[i];
+    };
+    function liveCollection(resolve) {
+        return new Proxy(Object.create(HTMLCollection.prototype), {
+            get(target, key) {
+                if (key === 'length') return resolve().length;
+                if (typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) return resolve()[Number(key)];
+                if (typeof key === 'string' && !(key in target)) {
+                    return resolve().find(node => node.id === key || node.getAttribute('name') === key);
+                }
+                return Reflect.get(target, key);
+            },
+            has(target, key) {
+                return key === 'length' || (typeof key === 'string' &&
+                    /^(0|[1-9]\d*)$/.test(key) && Number(key) < resolve().length) || key in target;
+            },
+            ownKeys(target) {
+                return [...resolve().map((_, index) => String(index)), ...Reflect.ownKeys(target)];
+            },
+            getOwnPropertyDescriptor(target, key) {
+                if (typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) {
+                    const node = resolve()[Number(key)];
+                    if (node) return { value: node, writable: false, enumerable: true, configurable: true };
+                }
+                return Reflect.getOwnPropertyDescriptor(target, key);
+            }
+        });
+    }
+    window.HTMLCollection = HTMLCollection;
+
+    function findElements(root, predicate, includeRoot = false) {
+        const found = [];
+        function visit(node) {
+            if (node?.nodeType === 1 && predicate(node)) found.push(node);
+            for (const child of node?.childNodes || []) visit(child);
+        }
+        if (includeRoot) visit(root);
+        else for (const child of root?.childNodes || []) visit(child);
+        return found;
+    }
+    function hasClasses(node, value) {
+        const tokens = String(value).trim().split(/\s+/).filter(Boolean);
+        return !!tokens.length && tokens.every(token => node.classList.contains(token));
+    }
+
+    function escapeText(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    }
+    function serializeNode(node) {
+        if (node.nodeType === 3) return escapeText(node.data);
+        if (node.nodeType === 8) return `<!--${node.data}-->`;
+        if (node.nodeType !== 1) return '';
+        const attrs = node.getAttributeNames().map(name =>
+            ` ${name}="${String(node.getAttribute(name)).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`).join('');
+        const start = `<${node.localName}${attrs}>`;
+        if (new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']).has(node.localName)) return start;
+        return start + node.childNodes.map(serializeNode).join('') + `</${node.localName}>`;
+    }
+    Object.defineProperties(Element.prototype, {
+        id: {
+            get() { return this._attrValues.id || ''; },
+            set(value) { this.setAttribute('id', value); }, configurable: true, enumerable: true
+        },
+        className: {
+            get() { return this._attrValues.class || ''; },
+            set(value) { this.setAttribute('class', value); }, configurable: true, enumerable: true
+        },
+        textContent: {
+            get() { return this.childNodes.map(node => node.nodeType === 8 ? '' : node.textContent).join(''); },
+            set(value) {
+                while (this.firstChild) this.removeChild(this.firstChild);
+                if (value != null && String(value)) this.appendChild(this.ownerDocument?.createTextNode(String(value)) || new Text(String(value)));
+            }, configurable: true, enumerable: true
+        },
+        innerText: {
+            get() { return this.textContent; },
+            set(value) { this.textContent = String(value); },
+            configurable: true, enumerable: true
+        },
+        innerHTML: {
+            get() { return this.childNodes.map(serializeNode).join(''); },
+            set(value) {
+                const bridge = window.__htmlBridge__;
+                if (!bridge) throw new Error('HTML parser is unavailable');
+                this.replaceChildren(...bridge.parseFragment(String(value)).map(createParsedNode));
+            }, configurable: true, enumerable: true
+        },
+        outerHTML: {
+            get() { return serializeNode(this); },
+            set(value) {
+                if (!this.parentNode) return;
+                const bridge = window.__htmlBridge__;
+                if (!bridge) throw new Error('HTML parser is unavailable');
+                const nodes = bridge.parseFragment(String(value)).map(createParsedNode);
+                for (const node of nodes) this.parentNode.insertBefore(node, this);
+                this.parentNode.removeChild(this);
+            }, configurable: true, enumerable: true
+        }
+    });
+
+    function createParsedNode(node) {
+        if (node.type === 'text') return document.createTextNode(node.value);
+        if (node.type === 'comment') return document.createComment(node.value);
+        const element = document.createElement(node.name);
+        for (const [name, value] of node.attributes) element.setAttribute(name, value);
+        for (const child of node.children) element.appendChild(createParsedNode(child));
+        // Initial form state reflects parsed attributes; later value/checked changes are
+        // independent of the HTML attributes, as they are in browser form controls.
+        if (node.name === 'input') {
+            element.value = element.defaultValue = element.getAttribute('value') || '';
+            element.checked = element.defaultChecked = element.hasAttribute('checked');
+        } else if (node.name === 'textarea') {
+            element.value = element.defaultValue = element.textContent;
+        }
+        for (const attribute of ['name', 'type', 'placeholder', 'alt', 'rel', 'target']) {
+            const value = element.getAttribute(attribute);
+            if (value !== null && attribute in element) element[attribute] = value;
+        }
+        return element;
+    }
+
+    function reflectURL(element, property, attribute) {
+        delete element[property];
+        Object.defineProperty(element, property, {
+            configurable: true, enumerable: true,
+            get() {
+                const raw = this.getAttribute(attribute);
+                return raw === null ? '' : new URL(raw, this.ownerDocument?.baseURI || location.href).href;
+            },
+            set(value) { this.setAttribute(attribute, String(value)); }
+        });
+    }
     
     // 属性操作
     Element.prototype.getAttribute = function(name) {
@@ -521,9 +716,7 @@
         this._attrValues[name] = strValue;
         this.attributes.setNamedItem(new Attr(name, strValue, this));
         
-        if (name === 'id') this.id = strValue;
         if (name === 'class') {
-            this.className = strValue;
             this.classList._tokens = strValue.split(/\s+/).filter(Boolean);
         }
         if (name === 'style') this.style.cssText = strValue;
@@ -539,8 +732,11 @@
     Element.prototype.removeAttribute = function(name) {
         delete this._attrValues[name];
         this.attributes.removeNamedItem(name);
-        if (name === 'id') this.id = '';
-        if (name === 'class') { this.className = ''; this.classList._tokens = []; }
+        if (name === 'class') this.classList._tokens = [];
+        if (name === 'style') {
+            this.style._styles = {};
+            this.style._importantStyles = {};
+        }
         
         Monitor.log('Attribute', 'removeAttribute', {
             elementId: this.__id__,
@@ -639,6 +835,10 @@
             }
         });
     };
+    Element.prototype.replaceChildren = function(...nodes) {
+        while (this.firstChild) this.removeChild(this.firstChild);
+        this.append(...nodes);
+    };
     
     // 查询
     Element.prototype.querySelector = function(selector) {
@@ -647,7 +847,7 @@
         const mock = Monitor.executeMock('element.querySelector', [selector], this);
         if (mock.mocked) return mock.result;
         
-        return null;
+        return window.__htmlBridge__?.select(this, selector)[0] || null;
     };
     
     Element.prototype.querySelectorAll = function(selector) {
@@ -656,27 +856,30 @@
         const mock = Monitor.executeMock('element.querySelectorAll', [selector], this);
         if (mock.mocked) return mock.result;
         
-        return [];
+        return staticNodeList(window.__htmlBridge__?.select(this, selector) || []);
     };
     
     Element.prototype.getElementsByTagName = function(tagName) {
         Monitor.log('DOM', 'getElementsByTagName', { elementId: this.__id__, tagName });
-        return [];
+        return liveCollection(() => window.__htmlBridge__?.select(this, String(tagName)) || []);
     };
     
     Element.prototype.getElementsByClassName = function(className) {
         Monitor.log('DOM', 'getElementsByClassName', { elementId: this.__id__, className });
-        return [];
+        return liveCollection(() => findElements(this, node => hasClasses(node, className)));
     };
     
     Element.prototype.closest = function(selector) {
         Monitor.log('DOM', 'closest', { elementId: this.__id__, selector });
+        for (let node = this; node?.nodeType === 1; node = node.parentElement) {
+            if (node.matches(selector)) return node;
+        }
         return null;
     };
     
     Element.prototype.matches = function(selector) {
         Monitor.log('DOM', 'matches', { elementId: this.__id__, selector });
-        return false;
+        return window.__htmlBridge__?.matches(this, selector) || false;
     };
     
     // 几何相关
@@ -711,13 +914,16 @@
     };
     Element.prototype.click = function() {
         Monitor.log('DOM', 'click', { elementId: this.__id__ });
-        this.dispatchEvent(new Event('click'));
+        this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
     };
     
     // 事件
     Element.prototype.addEventListener = function(type, listener, options) {
         if (!this._eventListeners[type]) this._eventListeners[type] = [];
-        this._eventListeners[type].push({ listener, options });
+        if (listener && !this._eventListeners[type].some(item => item.listener === listener &&
+            !!item.options?.capture === !!options?.capture)) {
+            this._eventListeners[type].push({ listener, options });
+        }
         Monitor.log('Event', 'addEventListener', {
             elementId: this.__id__,
             tagName: this.tagName,
@@ -737,28 +943,65 @@
     
     Element.prototype.dispatchEvent = function(event) {
         event.target = this;
-        event.currentTarget = this;
-        const listeners = this._eventListeners[event.type] || [];
-        listeners.forEach(({ listener }) => {
-            if (typeof listener === 'function') {
-                listener.call(this, event);
-            } else if (listener && typeof listener.handleEvent === 'function') {
-                listener.handleEvent(event);
+        for (let node = this; node; node = node.parentNode) {
+            event.currentTarget = node;
+            event.eventPhase = node === this ? 2 : 3;
+            const listeners = [...(node._eventListeners?.[event.type] || [])];
+            for (const { listener, options } of listeners) {
+                if (event._immediatePropagationStopped) break;
+                if (typeof listener === 'function') listener.call(node, event);
+                else if (listener && typeof listener.handleEvent === 'function') listener.handleEvent(event);
+                if (options?.once) node.removeEventListener(event.type, listener, options);
             }
-        });
+            if (!event._immediatePropagationStopped && typeof node['on' + event.type] === 'function') {
+                node['on' + event.type].call(node, event);
+            }
+            if (!event.bubbles || event._propagationStopped) break;
+        }
+        if (event.bubbles && !event._propagationStopped) window.dispatchEvent(event);
+        event.currentTarget = null;
+        event.eventPhase = 0;
         return !event.defaultPrevented;
     };
     
     // 其他
     Element.prototype.insertAdjacentHTML = function(position, html) {
         Monitor.log('DOM', 'insertAdjacentHTML', { elementId: this.__id__, position, html: html?.substring(0, 100) });
+        const bridge = window.__htmlBridge__;
+        if (!bridge) throw new Error('HTML parser is unavailable');
+        const nodes = bridge.parseFragment(String(html)).map(createParsedNode);
+        const where = String(position).toLowerCase();
+        if (where === 'beforebegin' || where === 'afterend') {
+            if (!this.parentNode) return;
+            for (const node of nodes) this.parentNode.insertBefore(node,
+                where === 'beforebegin' ? this : this.nextSibling);
+        } else if (where === 'afterbegin') {
+            const first = this.firstChild;
+            for (const node of nodes) this.insertBefore(node, first);
+        } else if (where === 'beforeend') {
+            for (const node of nodes) this.appendChild(node);
+        } else {
+            throw new DOMException('Invalid position', 'SyntaxError');
+        }
     };
     Element.prototype.insertAdjacentElement = function(position, element) {
         Monitor.log('DOM', 'insertAdjacentElement', { elementId: this.__id__, position });
+        const where = String(position).toLowerCase();
+        if (where === 'beforebegin' || where === 'afterend') {
+            if (!this.parentNode) return null;
+            this.parentNode.insertBefore(element, where === 'beforebegin' ? this : this.nextSibling);
+        } else if (where === 'afterbegin') {
+            this.insertBefore(element, this.firstChild);
+        } else if (where === 'beforeend') {
+            this.appendChild(element);
+        } else {
+            throw new DOMException('Invalid position', 'SyntaxError');
+        }
         return element;
     };
     Element.prototype.insertAdjacentText = function(position, text) {
         Monitor.log('DOM', 'insertAdjacentText', { elementId: this.__id__, position });
+        this.insertAdjacentElement(position, this.ownerDocument.createTextNode(String(text)));
     };
     Element.prototype.attachShadow = function(options) {
         Monitor.log('DOM', 'attachShadow', { elementId: this.__id__, options });
@@ -919,6 +1162,8 @@
         
         const mock = Monitor.executeMock('canvas.toDataURL', [type, quality], this);
         if (mock.mocked) return mock.result;
+        const configured = window.__profile__?.canvas?.toDataURL;
+        if (typeof configured === 'string' && (!type || type === 'image/png')) return configured;
         
         return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     };
@@ -1153,20 +1398,45 @@
         this.TEXTURE0 = 0x84C0;
         this.COMPILE_STATUS = 0x8B81;
         this.LINK_STATUS = 0x8B82;
+        this.VENDOR = 0x1F00;
+        this.RENDERER = 0x1F01;
+        this.VERSION = 0x1F02;
+        this.SHADING_LANGUAGE_VERSION = 0x8B8C;
+        this._debugEnabled = false;
     }
     
     WebGLRenderingContext.prototype = {
         getExtension: function(name) {
             Monitor.log('WebGL', 'getExtension', { name });
+            const supported = window.__profile__?.webgl?.extensions || [];
+            if (supported.includes(String(name))) {
+                if (name === 'WEBGL_debug_renderer_info') {
+                    this._debugEnabled = true;
+                    return { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
+                }
+                return {};
+            }
             return null;
         },
-        getSupportedExtensions: function() { return []; },
+        getSupportedExtensions: function() { return [...(window.__profile__?.webgl?.extensions || [])]; },
         getParameter: function(pname) {
             Monitor.log('WebGL', 'getParameter', { pname });
             
             const mock = Monitor.executeMock('webgl.getParameter', [pname], this);
             if (mock.mocked) return mock.result;
-            
+            const profile = window.__profile__?.webgl;
+            if (!profile) return null;
+            const key = String(pname);
+            if ((key === '37445' || key === '37446') && !this._debugEnabled) return null;
+            if (Object.prototype.hasOwnProperty.call(profile.parameters || {}, key)) {
+                return profile.parameters[key];
+            }
+            const fields = { '7936': 'vendor', '7937': 'renderer', '7938': 'version',
+                '35724': 'shadingLanguageVersion', '37445': 'unmaskedVendor',
+                '37446': 'unmaskedRenderer' };
+            if (fields[key] && Object.prototype.hasOwnProperty.call(profile, fields[key])) {
+                return profile[fields[key]];
+            }
             return null;
         },
         getShaderPrecisionFormat: function(shadertype, precisiontype) {
@@ -2362,6 +2632,10 @@
             }
             
             element.ownerDocument = this;
+            const urlAttribute = ({ a: 'href', area: 'href', link: 'href', base: 'href',
+                form: 'action',
+                img: 'src', script: 'src', iframe: 'src', source: 'src' })[lowerTag];
+            if (urlAttribute) reflectURL(element, urlAttribute, urlAttribute);
             
             // 记录创建
             Monitor.logCreate(tagName, element, options);
@@ -2496,7 +2770,8 @@
             Monitor.popChain();
             
             if (mock.mocked) return mock.result;
-            return null;
+            return findElements(this.documentElement,
+                node => node.getAttribute('id') === String(id), true)[0] || null;
         },
         
         getElementsByName: function(name) {
@@ -2505,7 +2780,8 @@
             const mock = Monitor.executeMock('document.getElementsByName', [name], this);
             if (mock.mocked) return mock.result;
             
-            return [];
+            return staticNodeList(findElements(this.documentElement,
+                node => node.getAttribute('name') === String(name), true));
         },
         
         getElementsByTagName: function(tagName) {
@@ -2514,7 +2790,8 @@
             const mock = Monitor.executeMock('document.getElementsByTagName', [tagName], this);
             if (mock.mocked) return mock.result;
             
-            return [];
+            return liveCollection(() => window.__htmlBridge__?.select(this.documentElement,
+                String(tagName), true) || []);
         },
         
         getElementsByClassName: function(className) {
@@ -2523,7 +2800,8 @@
             const mock = Monitor.executeMock('document.getElementsByClassName', [className], this);
             if (mock.mocked) return mock.result;
             
-            return [];
+            return liveCollection(() => findElements(this.documentElement,
+                node => hasClasses(node, className), true));
         },
         
         querySelector: function(selector) {
@@ -2532,7 +2810,7 @@
             const mock = Monitor.executeMock('document.querySelector', [selector], this);
             if (mock.mocked) return mock.result;
             
-            return null;
+            return window.__htmlBridge__?.select(this.documentElement, selector, true)[0] || null;
         },
         
         querySelectorAll: function(selector) {
@@ -2541,7 +2819,7 @@
             const mock = Monitor.executeMock('document.querySelectorAll', [selector], this);
             if (mock.mocked) return mock.result;
             
-            return [];
+            return staticNodeList(window.__htmlBridge__?.select(this.documentElement, selector, true) || []);
         },
         
         // ========== 文档操作 ==========
@@ -2736,6 +3014,7 @@
         
         document.documentElement.appendChild(document.head);
         document.documentElement.appendChild(document.body);
+        document.documentElement._setConnected(true);
         
         // 设置相关引用
         document.defaultView = window;
@@ -2744,6 +3023,64 @@
     }
     
     initDocumentStructure();
+
+    let fallbackTitle = '';
+    Object.defineProperty(document, 'title', {
+        enumerable: true, configurable: true,
+        get() {
+            const title = document.head?.querySelector('title');
+            return title ? title.textContent : fallbackTitle;
+        },
+        set(value) {
+            fallbackTitle = String(value);
+            if (!document.head) return;
+            let title = document.head.querySelector('title');
+            if (!title) {
+                title = document.createElement('title');
+                document.head.appendChild(title);
+            }
+            title.textContent = fallbackTitle;
+        }
+    });
+
+    document.childNodes = [document.documentElement];
+    document.firstChild = document.documentElement;
+    document.lastChild = document.documentElement;
+    document.documentElement.parentNode = document;
+    for (const [name, selector] of Object.entries({
+        images: 'img', forms: 'form', scripts: 'script', links: 'a[href], area[href]',
+        anchors: 'a[name]', embeds: 'embed'
+    })) {
+        Object.defineProperty(document, name, {
+            configurable: true, enumerable: true,
+            get: () => liveCollection(() => window.__htmlBridge__?.select(document.documentElement,
+                selector, true) || [])
+        });
+    }
+
+    Object.defineProperty(window, '__loadHTML__', {
+        configurable: true,
+        value: function(tree, pageURL) {
+            if (pageURL) window.location.href = pageURL;
+            const html = tree.find(node => node.type === 'element' && node.name === 'html');
+            if (!html) throw new Error('Parsed HTML has no document element');
+            document.documentElement._setConnected(false);
+            document.documentElement = createParsedNode(html);
+            document.childNodes = [document.documentElement];
+            document.firstChild = document.documentElement;
+            document.lastChild = document.documentElement;
+            document.documentElement.parentNode = document;
+            document.documentElement._setConnected(true);
+            document.head = document.documentElement.querySelector('head');
+            document.body = document.documentElement.querySelector('body');
+            document.scrollingElement = document.documentElement;
+            document.activeElement = document.body;
+            fallbackTitle = document.head?.querySelector('title')?.textContent || '';
+            const base = document.head?.querySelector('base[href]')?.getAttribute('href');
+            document.baseURI = base ? new URL(base, document.URL).href : document.URL;
+            return document;
+        }
+    });
     
     // ==================== 暴露到全局 ====================
     function Document() { throw new TypeError('Illegal constructor'); }
